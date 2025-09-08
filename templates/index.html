@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Home Loan Pre-Payment Calculator</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .card { margin-top: 16px; }
+    .small-col { max-width: 240px; }
+  </style>
+</head>
+<body class="bg-light">
+  <div class="container py-4">
+    <h2>Home Loan Pre-Payment Calculator</h2>
+    <p class="text-muted">Enter loan details and choose a pre-payment strategy.</p>
+
+    <form method="post" class="row g-3">
+      <div class="col-md-4">
+        <label class="form-label">Outstanding Principal</label>
+        <input required name="principal" class="form-control"
+               value="{{ form.get('principal') if form.get('principal') is not none else '' }}"
+               placeholder="e.g., 5000000">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Loan Start Date</label>
+        <input type="date" name="loan_start" class="form-control"
+               value="{{ form.get('loan_start') if form.get('loan_start') is not none else '' }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Tenure (years)</label>
+        <input required name="tenure_years" class="form-control"
+               value="{{ form.get('tenure_years') if form.get('tenure_years') is not none else 20 }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Interest Rate (annual %)</label>
+        <input required name="roi" class="form-control"
+               value="{{ form.get('roi') if form.get('roi') is not none else 8.5 }}">
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Pre-payment method</label>
+        <select name="method" class="form-select">
+          <option value="none" {% if form.get('method') == 'none' %}selected{% endif %}>None</option>
+          <option value="extra_emi" {% if form.get('method') == 'extra_emi' %}selected{% endif %}>Pay Extra EMI</option>
+          <option value="lump" {% if form.get('method') == 'lump' %}selected{% endif %}>Pay Lump-sum</option>
+          <option value="increase_emi" {% if form.get('method') == 'increase_emi' %}selected{% endif %}>Increase EMI % per year</option>
+          <option value="extra_and_increase" {% if form.get('method') == 'extra_and_increase' %}selected{% endif %}>Extra EMI + Increase % per year</option>
+        </select>
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label">Extra EMI amount (per frequency)</label>
+        <input name="extra_emi" class="form-control"
+               value="{{ form.get('extra_emi') if form.get('extra_emi') is not none else 0 }}">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Lump-sum amount</label>
+        <input name="lump_sum" class="form-control"
+               value="{{ form.get('lump_sum') if form.get('lump_sum') is not none else 0 }}">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">EMI increase % (per year)</label>
+        <input name="emi_increase_pct" class="form-control"
+               value="{{ form.get('emi_increase_pct') if form.get('emi_increase_pct') is not none else 0 }}">
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label">When to start pre-paying</label>
+        <select name="start_type" class="form-select">
+          <option value="immediate" {% if form.get('start_type') == 'immediate' %}selected{% endif %}>Immediately</option>
+          <option value="after_months" {% if form.get('start_type') == 'after_months' %}selected{% endif %}>After X months</option>
+          <option value="after_years" {% if form.get('start_type') == 'after_years' %}selected{% endif %}>After X years</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Start after value</label>
+        <input name="start_after_value" class="form-control"
+               value="{{ form.get('start_after_value') if form.get('start_after_value') is not none else 0 }}">
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label">Frequency</label>
+        <select name="frequency" class="form-select">
+          <option value="once" {% if form.get('frequency') == 'once' %}selected{% endif %}>Once</option>
+          <option value="monthly" {% if form.get('frequency') == 'monthly' or form.get('frequency') is none %}selected{% endif %}>Monthly</option>
+          <option value="quarterly" {% if form.get('frequency') == 'quarterly' %}selected{% endif %}>Quarterly</option>
+          <option value="half-yearly" {% if form.get('frequency') == 'half-yearly' %}selected{% endif %}>Half-yearly</option>
+          <option value="yearly" {% if form.get('frequency') == 'yearly' %}selected{% endif %}>Yearly</option>
+        </select>
+      </div>
+
+      <div class="col-12">
+        <button class="btn btn-primary">Calculate</button>
+      </div>
+    </form>
+
+    {% if result %}
+    <div class="row">
+      <div class="col-md-4">
+        <div class="card p-3">
+          <h5>Baseline (no prepay)</h5>
+          <p>Total interest: <strong>₹ {{ result.baseline_total_interest }}</strong></p>
+          <p>Tenure: <strong>{{ result.baseline_months }} months</strong></p>
+        </div>
+      </div>
+      <div class="col-md-4">
+  <div class="card p-3">
+    <h5>With prepay</h5>
+    <p>Total interest: <strong>₹ {{ result.with_prepay_total_interest }}</strong></p>
+    <p>Tenure: <strong>{{ result.with_prepay_months }} months</strong></p>
+    <p>
+      New remaining tenure:
+      <strong>
+        {% if result.with_prepay_years and result.with_prepay_years > 0 %}
+          {{ result.with_prepay_years }} yr{% if result.with_prepay_years > 1 %}s{% endif %}
+        {% endif %}
+        {% if result.with_prepay_months_rem and result.with_prepay_months_rem > 0 %}
+          {{ result.with_prepay_months_rem }} mo{% if result.with_prepay_months_rem > 1 %}s{% endif %}
+        {% endif %}
+        {% if (not result.with_prepay_years or result.with_prepay_years == 0) and (not result.with_prepay_months_rem or result.with_prepay_months_rem == 0) %}
+          0 months
+        {% endif %}
+      </strong>
+    </p>
+    {% if result.with_prepay_end_date %}
+      <p>Estimated end date: <strong>{{ result.with_prepay_end_date }}</strong></p>
+    {% endif %}
+  </div>
+</div>
+      <div class="col-md-4">
+        <div class="card p-3">
+          <h5>Savings</h5>
+          <p>Interest saved: <strong>₹ {{ result.interest_saved }}</strong></p>
+          <p>Months saved: <strong>{{ result.months_saved }}</strong></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <h5>Sample schedule (first 12 months)</h5>
+        {% if with_prepay and with_prepay.schedule %}
+        <table class="table table-sm">
+          <thead><tr><th>Month</th><th>EMI</th><th>Interest</th><th>Principal</th><th>Extra</th><th>Lump</th><th>Remaining</th></tr></thead>
+          <tbody>
+            {% for r in with_prepay.schedule[:36] %}
+            <tr>
+              <td>{{ r.month }}</td>
+              <td>{{ r.emi }}</td>
+              <td>{{ r.interest }}</td>
+              <td>{{ r.principal }}</td>
+              <td>{{ r.extra_paid if r.extra_paid is not none else '-' }}</td>
+              <td>{{ r.lump_paid if r.lump_paid is not none else '-' }}</td>
+              <td>{{ r.remaining }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+          <p class="text-muted">No schedule available.</p>
+        {% endif %}
+        <p class="text-muted">Full schedule available — we can add CSV export if you want.</p>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+</body>
+</html>

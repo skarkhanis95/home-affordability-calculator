@@ -1,26 +1,49 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request
 from decimal import Decimal, getcontext, ROUND_HALF_UP
-import math
 from datetime import datetime, date
 import calendar
+import json
 
 getcontext().prec = 28
 
 app = Flask(__name__)
 
-# Helper: round to 2 decimals as monetary
+# ----------------------------
+# Helpers (money, EMI, months)
+# ----------------------------
+def money(x):
+    return Decimal(x).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+def format_money_for_display(x):
+    """Return a string with commas and two decimals. x may be Decimal, float or str."""
+    if x is None or x == "":
+        return ""
+    d = Decimal(x)
+    d = d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{d:,.2f}"
+
+def monthly_rate(annual_pct):
+    return Decimal(annual_pct) / Decimal(12 * 100)
+
+def calc_standard_emi(principal, annual_rate_pct, months):
+    P = Decimal(principal)
+    r = monthly_rate(annual_rate_pct)
+    n = int(months)
+    if n <= 0:
+        return Decimal('0.00')
+    if r == 0:
+        return money(P / n)
+    numerator = r * P
+    denominator = (1 - (1 + r) ** (-n))
+    emi = numerator / denominator
+    return money(emi)
 
 def months_to_years_months(total_months):
-    """Convert integer months to (years, months)."""
     years = total_months // 12
     months = total_months % 12
     return int(years), int(months)
 
 def add_months_to_date(dt, months):
-    """
-    Add 'months' months to date dt (dt is a datetime.date or datetime).
-    If resulting month has fewer days than dt.day, clamp to last day of month.
-    """
     if isinstance(dt, datetime):
         dt_date = dt.date()
     else:
@@ -30,49 +53,59 @@ def add_months_to_date(dt, months):
     if m > 12:
         y += 1
         m -= 12
-    # clamp day
     last_day = calendar.monthrange(y, m)[1]
     day = min(dt_date.day, last_day)
     return date(y, m, day)
 
+# ----------------------------
+# Input parsing helper
+# ----------------------------
+def parse_decimal_from_form(value, default="0"):
+    """
+    Clean commas/whitespace from a form input and convert to Decimal.
+    If input is empty/blank -> returns None.
+    If invalid -> returns Decimal(default).
+    """
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    s = str(value).strip().replace(',', '')
+    if s == '':
+        return None
+    try:
+        return Decimal(s)
+    except Exception:
+        # fallback to default decimal value (as Decimal)
+        return Decimal(default)
 
-def money(x):
-    return Decimal(x).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-def monthly_rate(annual_pct):
-    return Decimal(annual_pct) / Decimal(12 * 100)
+def parse_int_from_form(value, default=0):
+    if value is None:
+        return default
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
 
-def calc_standard_emi(principal, annual_rate_pct, months):
-    P = Decimal(principal)
-    r = monthly_rate(annual_rate_pct)
-    n = int(months)
-    if r == 0:
-        return money(P / n)
-    numerator = r * P
-    denominator = (1 - (1 + r) ** (-n))
-    emi = numerator / denominator
-    return money(emi)
-
-
+# ----------------------------
+# Amortization and prepay sim
+# ----------------------------
 def simulate_schedule(principal, annual_rate_pct, months, starting_emi=None):
-    """
-    Simulate an amortization schedule (no prepayment) and return totals
-    """
     P = Decimal(principal)
     r = monthly_rate(annual_rate_pct)
     n = int(months)
-    emi = starting_emi or calc_standard_emi(P, annual_rate_pct, n)
-    emi = Decimal(emi)
+    emi = Decimal(starting_emi or calc_standard_emi(P, annual_rate_pct, n))
     month = 0
     interest_total = Decimal('0')
     remaining = Decimal(P)
     schedule = []
-    while remaining > Decimal('0.005') and month < 1000:
+    while remaining > Decimal('0.005') and month < 2000:
         month += 1
-        interest = (remaining * r)
+        interest = remaining * r
         principal_component = emi - interest
         if principal_component <= 0:
-            raise ValueError("EMI does not cover the interest; increase EMI or check rates.")
+            raise ValueError("EMI does not cover interest; check inputs.")
         if principal_component > remaining:
             principal_component = remaining
             emi_for_month = interest + principal_component
@@ -87,9 +120,6 @@ def simulate_schedule(principal, annual_rate_pct, months, starting_emi=None):
             'principal': money(principal_component),
             'remaining': money(max(remaining, Decimal('0.00')))
         })
-        if month >= n and remaining > 0:
-            # safety: if we've gone full term but small remaining due to rounding, finish
-            pass
     return {
         'schedule': schedule,
         'months': month,
@@ -98,11 +128,6 @@ def simulate_schedule(principal, annual_rate_pct, months, starting_emi=None):
     }
 
 def is_prepay_event(month_index, start_after_months, frequency):
-    """
-    month_index: 1-based month number (1 = first month)
-    start_after_months: prepay start offset in months (0 means prepay may start at month 1)
-    frequency: 'monthly','quarterly','half-yearly','yearly','once'
-    """
     if month_index < 1 + start_after_months:
         return False
     offset_index = month_index - start_after_months
@@ -115,7 +140,6 @@ def is_prepay_event(month_index, start_after_months, frequency):
     if frequency == 'yearly':
         return (offset_index - 1) % 12 == 0
     if frequency == 'once':
-        # Only on the first eligible month
         return offset_index == 1
     return False
 
@@ -126,10 +150,6 @@ def simulate_with_prepay(principal, annual_rate_pct, months,
                          emi_increase_pct_per_year=0,
                          start_after_months=0,
                          frequency='monthly'):
-    """
-    Simulate schedule honoring prepayment options.
-    Returns schedule and totals.
-    """
     P = Decimal(principal)
     r = monthly_rate(annual_rate_pct)
     n = int(months)
@@ -141,54 +161,37 @@ def simulate_with_prepay(principal, annual_rate_pct, months,
     interest_total = Decimal('0')
     remaining = Decimal(P)
     schedule = []
-    # anniversary detection: when month % 12 == 1 after start -> we consider start month as month 1
-    while remaining > Decimal('0.005') and month < 1200:
+    while remaining > Decimal('0.005') and month < 2000:
         month += 1
-        # At start of month, check for EMI increase on anniversaries
-        # Increase EMI on months 13,25,...? We define that EMI increase triggers at months where (month-1) % 12 == 0 and month != 1?
-        # For "Increase per year", commonly increase is applied at yearly anniversaries after the first year.
+        # annual EMI increase applied at every yearly anniversary after month 1:
         if month > 1 and (month - 1) % 12 == 0 and inc_pct != 0:
             emi = (emi * (Decimal(1) + inc_pct)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-        # compute interest
         interest = remaining * r
         principal_component = emi - interest
         if principal_component <= 0:
-            raise ValueError("EMI too small to cover interest; adjust EMI or increase rate.")
-        # If EMI principal > remaining, final payment
+            raise ValueError("EMI too small to cover interest.")
         if principal_component >= remaining:
             principal_component = remaining
             emi_for_month = interest + principal_component
         else:
             emi_for_month = emi
-
-        # apply normal payment
         remaining -= principal_component
         interest_total += interest
-
-        # Apply any prepay event scheduled for this month
+        schedule_prepay = None
+        schedule_extra = None
         if is_prepay_event(month, start_after_months, frequency):
-            # Lump-sum first (if any)
             if lump > 0:
                 pay = min(lump, remaining)
                 remaining -= pay
                 schedule_prepay = money(pay)
-                lump = Decimal('0') if frequency == 'once' else lump
-            else:
-                schedule_prepay = None
-            # Extra EMI: applied as principal payment (extra towards principal)
+                if frequency == 'once':
+                    lump = Decimal('0')
             if extra > 0:
                 pay_extra = min(extra, remaining)
                 remaining -= pay_extra
                 schedule_extra = money(pay_extra)
                 if frequency == 'once':
                     extra = Decimal('0')
-            else:
-                schedule_extra = None
-        else:
-            schedule_prepay = None
-            schedule_extra = None
-
         schedule.append({
             'month': month,
             'emi': money(emi_for_month),
@@ -198,62 +201,93 @@ def simulate_with_prepay(principal, annual_rate_pct, months,
             'lump_paid': schedule_prepay,
             'remaining': money(max(remaining, Decimal('0.00')))
         })
+    total_paid = sum([s['emi'] for s in schedule]) + sum([s.get('extra_paid') or Decimal('0') for s in schedule]) + sum([s.get('lump_paid') or Decimal('0') for s in schedule])
     return {
         'schedule': schedule,
         'months': month,
         'total_interest': money(interest_total),
-        'total_paid': money(sum([s['emi'] for s in schedule]) + sum([s.get('extra_paid') or 0 for s in schedule]) + sum([s.get('lump_paid') or 0 for s in schedule]))
+        'total_paid': money(total_paid)
     }
 
-@app.route("/", methods=["GET", "POST"])
+# ----------------------------
+# Routes
+# ----------------------------
+@app.route('/', methods=['GET', 'POST'])
 def index():
-    if request.method == "GET":
-        return render_template("index.html", form={})
-    # POST: collect form
+    # on GET: safe defaults
+    if request.method == 'GET':
+        return render_template('index.html',
+                               form={},
+                               current_emi_server=None,
+                               schedule_serializable=[],
+                               schedule_json="[]",
+                               baseline_chart_json="[]",
+                               with_prepay_chart_json="[]",
+                               loan_start_str=None,
+                               result=None,
+                               with_prepay=None,
+                               baseline=None)
+
     form = request.form
-    principal = Decimal(form.get("principal", "0").replace(',', ''))
-    loan_start = form.get("loan_start")  # string date like YYYY-MM-DD
-    tenure_years = Decimal(form.get("tenure_years", "0"))
-    roi = Decimal(form.get("roi", "0"))
-    # prepay fields
-    method = form.get("method", "none")
-    extra_emi = Decimal(form.get("extra_emi", "0") or "0")
-    lump_sum = Decimal(form.get("lump_sum", "0") or "0")
-    emi_increase_pct = Decimal(form.get("emi_increase_pct", "0") or "0")
-    start_type = form.get("start_type", "immediate")
-    start_after_value = int(form.get("start_after_value", "0") or 0)
-    start_after_months = 0
-    if start_type == "immediate":
+
+    # Read & parse inputs safely (strip commas)
+    loan_amount = parse_decimal_from_form(form.get('loan_amount'), default="")
+    outstanding_principal = parse_decimal_from_form(form.get('principal'), default="0")
+    loan_start = form.get('loan_start') or None
+    tenure_years = parse_decimal_from_form(form.get('tenure_years'), default="0")
+    roi = parse_decimal_from_form(form.get('roi'), default="0")
+
+    # optional prepay fields (parse & clean)
+    method = form.get('method') or 'none'
+    extra_emi = parse_decimal_from_form(form.get('extra_emi'), default="0")
+    lump_sum = parse_decimal_from_form(form.get('lump_sum'), default="0")
+    emi_increase_pct = parse_decimal_from_form(form.get('emi_increase_pct'), default="0")
+    start_type = form.get('start_type') or 'immediate'
+    start_after_value = parse_int_from_form(form.get('start_after_value'), default=0)
+    if start_type == 'immediate':
         start_after_months = 0
-    elif start_type == "after_months":
+    elif start_type == 'after_months':
         start_after_months = start_after_value
-    elif start_type == "after_years":
+    elif start_type == 'after_years':
         start_after_months = start_after_value * 12
-    frequency = form.get("frequency", "monthly")
+    else:
+        start_after_months = 0
+    frequency = form.get('frequency') or 'monthly'
 
-    total_months = int(tenure_years * 12)
+    # convert tenure to int months
+    total_months = int(Decimal(tenure_years) * 12) if tenure_years else 0
 
-    # Baseline
-    baseline = simulate_schedule(principal, roi, total_months)
+    # Baseline schedule (simulate using outstanding principal)
+    baseline = simulate_schedule(outstanding_principal, roi, total_months)
 
-    # Decide parameters for prepay simulation based on method
+    # Base EMI for prepay sim: prefer loan_amount if provided and >0, else outstanding principal
+    if loan_amount is not None:
+        try:
+            if loan_amount > 0:
+                base_emi = calc_standard_emi(loan_amount, roi, total_months)
+            else:
+                base_emi = calc_standard_emi(outstanding_principal, roi, total_months)
+        except Exception:
+            base_emi = calc_standard_emi(outstanding_principal, roi, total_months)
+    else:
+        base_emi = calc_standard_emi(outstanding_principal, roi, total_months)
+
+    # map method to params
     extra_amt = Decimal('0')
     lump_amt = Decimal('0')
     inc_pct = Decimal('0')
-    if method == "extra_emi":
+    if method == 'extra_emi':
         extra_amt = extra_emi
-    elif method == "lump":
+    elif method == 'lump':
         lump_amt = lump_sum
-    elif method == "increase_emi":
+    elif method == 'increase_emi':
         inc_pct = emi_increase_pct
-    elif method == "extra_and_increase":
+    elif method == 'extra_and_increase':
         extra_amt = extra_emi
         inc_pct = emi_increase_pct
-    # Use base EMI as baseline EMI
-    base_emi = calc_standard_emi(principal, roi, total_months)
 
     with_prepay = simulate_with_prepay(
-        principal=principal,
+        principal=outstanding_principal,
         annual_rate_pct=roi,
         months=total_months,
         base_emi=base_emi,
@@ -264,39 +298,95 @@ def index():
         frequency=frequency
     )
 
-    result = {
-        'baseline_total_interest': str(baseline['total_interest']),
-        'baseline_months': baseline['months'],
-        'with_prepay_total_interest': str(with_prepay['total_interest']),
-        'with_prepay_months': with_prepay['months'],
-        'interest_saved': str(money(Decimal(baseline['total_interest']) - Decimal(with_prepay['total_interest']))),
-        'months_saved': baseline['months'] - with_prepay['months'],
-    }
-    # --- NEW: convert months -> years + months
+    # compute savings
+    interest_saved = baseline['total_interest'] - with_prepay['total_interest']
+    months_saved = baseline['months'] - with_prepay['months']
     yp, mp = months_to_years_months(with_prepay['months'])
-    result['with_prepay_years'] = yp
-    result['with_prepay_months_rem'] = mp  # remaining months after years
 
-    # If user provided a loan start date, compute end date
-    loan_start_str = form.get("loan_start")
-    if loan_start_str:
+    # end date if start given
+    if loan_start:
         try:
-            # accept YYYY-MM-DD
-            loan_start_dt = datetime.strptime(loan_start_str, "%Y-%m-%d").date()
-            # assuming with_prepay['months'] counts months including the first month,
-            # the end date is start + (months - 1) months, because start month counts as month 1.
+            loan_start_dt = datetime.strptime(loan_start, "%Y-%m-%d").date()
             months_to_add = with_prepay['months'] - 1 if with_prepay['months'] > 0 else 0
             end_date = add_months_to_date(loan_start_dt, months_to_add)
-            result['with_prepay_end_date'] = end_date.strftime("%d %b %Y")
+            end_date_str = end_date.strftime("%d %b %Y")
         except Exception:
-            # if parsing fails, skip end date
-            result['with_prepay_end_date'] = None
+            end_date_str = None
     else:
-        result['with_prepay_end_date'] = None
-    # For UI we return the top-level result and small slices of schedules
-    return render_template("index.html", result=result,
-                           baseline=baseline, with_prepay=with_prepay,
-                           form=form)
+        end_date_str = None
 
-if __name__ == "__main__":
+    # Total Property Ownership = outstanding principal + total interest over loan
+    baseline_total_property = baseline['total_interest'] + Decimal(outstanding_principal)
+    with_prepay_total_property = with_prepay['total_interest'] + Decimal(outstanding_principal)
+
+    # Prepare schedule serializable (strings formatted) for table and CSV
+    def schedule_to_serializable(sched):
+        out = []
+        for r in sched:
+            out.append({
+                'month': r['month'],
+                'emi': format_money_for_display(r['emi']),
+                'interest': format_money_for_display(r['interest']),
+                'principal': format_money_for_display(r['principal']),
+                'extra_paid': format_money_for_display(r['extra_paid']) if r.get('extra_paid') else '',
+                'lump_paid': format_money_for_display(r['lump_paid']) if r.get('lump_paid') else '',
+                'remaining': format_money_for_display(r['remaining'])
+            })
+        return out
+
+    schedule_serializable = schedule_to_serializable(with_prepay['schedule'])
+    schedule_json = json.dumps(schedule_serializable)
+
+    # Prepare chart series (month -> numeric remaining)
+    def schedule_for_chart_numeric(sched):
+        lst = []
+        for r in sched:
+            lst.append({'month': r['month'], 'remaining': float(r['remaining'])})
+        return lst
+
+    baseline_for_chart = schedule_for_chart_numeric(baseline['schedule'])
+    with_prepay_for_chart = schedule_for_chart_numeric(with_prepay['schedule'])
+    baseline_chart_json = json.dumps(baseline_for_chart)
+    with_prepay_chart_json = json.dumps(with_prepay_for_chart)
+
+    # server-side current EMI (from loan amount if provided)
+    current_emi_server = None
+    if loan_amount and total_months > 0:
+        try:
+            current_emi_server = format_money_for_display(calc_standard_emi(loan_amount, roi, total_months))
+        except Exception:
+            current_emi_server = None
+
+    # prepare result display values
+    result = {
+        'baseline_total_interest': format_money_for_display(baseline['total_interest']),
+        'baseline_months': baseline['months'],
+        'baseline_total_property': format_money_for_display(baseline_total_property),
+
+        'with_prepay_total_interest': format_money_for_display(with_prepay['total_interest']),
+        'with_prepay_months': with_prepay['months'],
+        'with_prepay_years': yp,
+        'with_prepay_months_rem': mp,
+        'with_prepay_end_date': end_date_str,
+        'with_prepay_total_property': format_money_for_display(with_prepay_total_property),
+
+        'interest_saved': format_money_for_display(interest_saved),
+        'months_saved': months_saved
+    }
+
+    return render_template(
+        'index.html',
+        form=form,
+        current_emi_server=current_emi_server,
+        result=result,
+        baseline=baseline,
+        with_prepay=with_prepay,
+        schedule_serializable=schedule_serializable,
+        schedule_json=schedule_json,
+        baseline_chart_json=baseline_chart_json,
+        with_prepay_chart_json=with_prepay_chart_json,
+        loan_start_str=loan_start
+    )
+
+if __name__ == '__main__':
     app.run(debug=True)

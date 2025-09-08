@@ -1,169 +1,503 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Home Loan Pre-Payment Calculator</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <meta charset="utf-8" />
+  <title>Pre-Payment Calculator — Wizard + Chart</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    .card { margin-top: 16px; }
-    .small-col { max-width: 240px; }
+    body { background:#f8f9fa; }
+    .wizard-card { background: #fff; border-radius: .5rem; box-shadow: 0 4px 20px rgba(0,0,0,.05); padding: 20px; margin: 18px 0; }
+    .step { display: none; }
+    .step.active { display: block; }
+    .muted-small { font-size: .9rem; color: #6c757d; }
+    .readonly-input { background: #e9ecef; }
+    .result-value { font-weight:600; font-size:1.05rem; }
+    .comma-input { text-align: right; }
+    .btn-step { min-width: 110px; }
+    table thead th { background:#f1f3f5; }
   </style>
 </head>
-<body class="bg-light">
+<body>
   <div class="container py-4">
-    <h2>Home Loan Pre-Payment Calculator</h2>
-    <p class="text-muted">Enter loan details and choose a pre-payment strategy.</p>
+    <h3>Home Loan — Pre-Payment Calculator</h3>
+    <p class="muted-small">Follow steps to specify loan, choose prepayment strategy, and see how much interest & tenure you save.</p>
 
-    <form method="post" class="row g-3">
-      <div class="col-md-4">
-        <label class="form-label">Outstanding Principal</label>
-        <input required name="principal" class="form-control"
-               value="{{ form.get('principal') if form.get('principal') is not none else '' }}"
-               placeholder="e.g., 5000000">
-      </div>
-      <div class="col-md-4">
-        <label class="form-label">Loan Start Date</label>
-        <input type="date" name="loan_start" class="form-control"
-               value="{{ form.get('loan_start') if form.get('loan_start') is not none else '' }}">
-      </div>
-      <div class="col-md-2">
-        <label class="form-label">Tenure (years)</label>
-        <input required name="tenure_years" class="form-control"
-               value="{{ form.get('tenure_years') if form.get('tenure_years') is not none else 20 }}">
-      </div>
-      <div class="col-md-2">
-        <label class="form-label">Interest Rate (annual %)</label>
-        <input required name="roi" class="form-control"
-               value="{{ form.get('roi') if form.get('roi') is not none else 8.5 }}">
-      </div>
+    <!-- WIZARD -->
+    <div class="wizard-card">
+      <div id="step1" class="step active">
+        <h5>Step 1 — Loan details</h5>
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">Loan Amount (original)</label>
+            <input id="loan_amount" name="loan_amount" form="wizardForm" class="form-control comma-input"
+                   value="{{ form.get('loan_amount') if form.get('loan_amount') is not none else '' }}" placeholder="e.g. 6,00,000.00">
+            <div class="muted-small">Original loan amount (used to compute current EMI)</div>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Outstanding Principal</label>
+            <input id="principal" name="principal" form="wizardForm" class="form-control comma-input" required
+                   value="{{ form.get('principal') if form.get('principal') is not none else '' }}" placeholder="e.g. 5,00,000.00">
+            <div class="muted-small">Principal remaining to be paid today</div>
+          </div>
 
-      <div class="col-12">
-        <label class="form-label">Pre-payment method</label>
-        <select name="method" class="form-select">
-          <option value="none" {% if form.get('method') == 'none' %}selected{% endif %}>None</option>
-          <option value="extra_emi" {% if form.get('method') == 'extra_emi' %}selected{% endif %}>Pay Extra EMI</option>
-          <option value="lump" {% if form.get('method') == 'lump' %}selected{% endif %}>Pay Lump-sum</option>
-          <option value="increase_emi" {% if form.get('method') == 'increase_emi' %}selected{% endif %}>Increase EMI % per year</option>
-          <option value="extra_and_increase" {% if form.get('method') == 'extra_and_increase' %}selected{% endif %}>Extra EMI + Increase % per year</option>
-        </select>
-      </div>
+          <div class="col-md-4">
+            <label class="form-label">Current EMI (calculated)</label>
+            <div class="input-group">
+              <input readonly id="current_emi" class="form-control readonly-input text-end" value="{{ current_emi_server if current_emi_server is not none else '' }}">
+              <span class="input-group-text">₹</span>
+            </div>
+            <div class="muted-small">Based on Loan Amount, Interest, Tenure</div>
+          </div>
 
-      <div class="col-md-3">
-        <label class="form-label">Extra EMI amount (per frequency)</label>
-        <input name="extra_emi" class="form-control"
-               value="{{ form.get('extra_emi') if form.get('extra_emi') is not none else 0 }}">
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">Lump-sum amount</label>
-        <input name="lump_sum" class="form-control"
-               value="{{ form.get('lump_sum') if form.get('lump_sum') is not none else 0 }}">
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">EMI increase % (per year)</label>
-        <input name="emi_increase_pct" class="form-control"
-               value="{{ form.get('emi_increase_pct') if form.get('emi_increase_pct') is not none else 0 }}">
-      </div>
+          <div class="col-md-3">
+            <label class="form-label">Loan Start Date</label>
+            <input id="loan_start" type="date" name="loan_start" form="wizardForm" class="form-control"
+                   value="{{ form.get('loan_start') if form.get('loan_start') is not none else '' }}">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Tenure (years)</label>
+            <input id="tenure_years" name="tenure_years" form="wizardForm" class="form-control" required
+                   value="{{ form.get('tenure_years') if form.get('tenure_years') is not none else 20 }}">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Interest Rate (annual %)</label>
+            <input id="roi" name="roi" form="wizardForm" class="form-control" required
+                   value="{{ form.get('roi') if form.get('roi') is not none else 8.5 }}">
+          </div>
 
-      <div class="col-md-3">
-        <label class="form-label">When to start pre-paying</label>
-        <select name="start_type" class="form-select">
-          <option value="immediate" {% if form.get('start_type') == 'immediate' %}selected{% endif %}>Immediately</option>
-          <option value="after_months" {% if form.get('start_type') == 'after_months' %}selected{% endif %}>After X months</option>
-          <option value="after_years" {% if form.get('start_type') == 'after_years' %}selected{% endif %}>After X years</option>
-        </select>
-      </div>
-      <div class="col-md-2">
-        <label class="form-label">Start after value</label>
-        <input name="start_after_value" class="form-control"
-               value="{{ form.get('start_after_value') if form.get('start_after_value') is not none else 0 }}">
+          <div class="col-md-12 text-end">
+            <button class="btn btn-primary btn-step" onclick="gotoStep(2)">Next</button>
+          </div>
+        </div>
       </div>
 
-      <div class="col-md-3">
-        <label class="form-label">Frequency</label>
-        <select name="frequency" class="form-select">
-          <option value="once" {% if form.get('frequency') == 'once' %}selected{% endif %}>Once</option>
-          <option value="monthly" {% if form.get('frequency') == 'monthly' or form.get('frequency') is none %}selected{% endif %}>Monthly</option>
-          <option value="quarterly" {% if form.get('frequency') == 'quarterly' %}selected{% endif %}>Quarterly</option>
-          <option value="half-yearly" {% if form.get('frequency') == 'half-yearly' %}selected{% endif %}>Half-yearly</option>
-          <option value="yearly" {% if form.get('frequency') == 'yearly' %}selected{% endif %}>Yearly</option>
-        </select>
+      <div id="step2" class="step">
+        <h5>Step 2 — Pre-payment method</h5>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Method</label>
+            <select id="method" name="method" form="wizardForm" class="form-select">
+              <option value="none" {% if form.get('method') == 'none' %}selected{% endif %}>None</option>
+              <option value="extra_emi" {% if form.get('method') == 'extra_emi' %}selected{% endif %}>Pay Extra EMI</option>
+              <option value="lump" {% if form.get('method') == 'lump' %}selected{% endif %}>Pay Lump-sum</option>
+              <option value="increase_emi" {% if form.get('method') == 'increase_emi' %}selected{% endif %}>Increase EMI % per year</option>
+              <option value="extra_and_increase" {% if form.get('method') == 'extra_and_increase' %}selected{% endif %}>Extra EMI + Increase % per year</option>
+            </select>
+          </div>
+
+          <div class="col-md-3 method-input extra-emi-field" style="display:none;">
+            <label class="form-label">Extra EMI amount</label>
+            <input id="extra_emi" name="extra_emi" form="wizardForm" class="form-control comma-input" value="{{ form.get('extra_emi') if form.get('extra_emi') is not none else 0 }}">
+            <div class="muted-small">Extra amount added per frequency</div>
+          </div>
+
+          <div class="col-md-3 method-input lump-field" style="display:none;">
+            <label class="form-label">Lump-sum amount</label>
+            <input id="lump_sum" name="lump_sum" form="wizardForm" class="form-control comma-input" value="{{ form.get('lump_sum') if form.get('lump_sum') is not none else 0 }}">
+            <div class="muted-small">Single / repeating lump-sum depending on frequency</div>
+          </div>
+
+          <div class="col-md-3 method-input increase-field" style="display:none;">
+            <label class="form-label">Increase EMI % (per year)</label>
+            <input id="emi_increase_pct" name="emi_increase_pct" form="wizardForm" class="form-control" value="{{ form.get('emi_increase_pct') if form.get('emi_increase_pct') is not none else 0 }}">
+            <div class="muted-small">% increase applied yearly</div>
+          </div>
+
+          <div class="col-md-12 text-end">
+            <button class="btn btn-secondary btn-step" onclick="gotoStep(1)">Back</button>
+            <button class="btn btn-primary btn-step" onclick="gotoStep(3)">Next</button>
+          </div>
+        </div>
       </div>
 
-      <div class="col-12">
-        <button class="btn btn-primary">Calculate</button>
-      </div>
-    </form>
+      <div id="step3" class="step">
+        <h5>Step 3 — Frequency & Start timing</h5>
+        <div class="row g-3">
+          <div class="col-md-3">
+            <label class="form-label">Frequency</label>
+            <select id="frequency" name="frequency" form="wizardForm" class="form-select">
+              <option value="once" {% if form.get('frequency') == 'once' %}selected{% endif %}>Once</option>
+              <option value="monthly" {% if form.get('frequency') == 'monthly' or form.get('frequency') is none %}selected{% endif %}>Monthly</option>
+              <option value="quarterly" {% if form.get('frequency') == 'quarterly' %}selected{% endif %}>Quarterly</option>
+              <option value="half-yearly" {% if form.get('frequency') == 'half-yearly' %}selected{% endif %}>Half-yearly</option>
+              <option value="yearly" {% if form.get('frequency') == 'yearly' %}selected{% endif %}>Yearly</option>
+            </select>
+          </div>
 
+          <div class="col-md-4">
+            <label class="form-label">When to start pre-paying</label>
+            <select id="start_type" name="start_type" form="wizardForm" class="form-select">
+              <option value="immediate" {% if form.get('start_type') == 'immediate' %}selected{% endif %}>Immediately</option>
+              <option value="after_months" {% if form.get('start_type') == 'after_months' %}selected{% endif %}>After X months</option>
+              <option value="after_years" {% if form.get('start_type') == 'after_years' %}selected{% endif %}>After X years</option>
+            </select>
+          </div>
+
+          <div class="col-md-2" id="start_after_value_container" style="display:none;">
+            <label class="form-label">Start after</label>
+            <input id="start_after_value" name="start_after_value" form="wizardForm" class="form-control" value="{{ form.get('start_after_value') if form.get('start_after_value') is not none else 0 }}">
+          </div>
+
+          <div class="col-md-12 text-end">
+            <button class="btn btn-secondary btn-step" onclick="gotoStep(2)">Back</button>
+            <button class="btn btn-primary btn-step" onclick="submitWizard()">Calculate</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- hidden form used to POST final data -->
+      <form id="wizardForm" method="post"></form>
+    </div>
+
+    <!-- RESULTS -->
     {% if result %}
-    <div class="row">
-      <div class="col-md-4">
-        <div class="card p-3">
+    <div class="row gy-3">
+      <!-- Chart -->
+      <div class="col-12">
+        <div class="wizard-card">
+          <h5>Outstanding Principal — Baseline vs With Prepay</h5>
+          <canvas id="balanceChart" height="120"></canvas>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <div class="wizard-card">
           <h5>Baseline (no prepay)</h5>
-          <p>Total interest: <strong>₹ {{ result.baseline_total_interest }}</strong></p>
-          <p>Tenure: <strong>{{ result.baseline_months }} months</strong></p>
+          <p>Total Interest: <span class="result-value">₹ {{ result.baseline_total_interest }}</span></p>
+          <p>Tenure: <span class="result-value">{{ result.baseline_months }} months</span></p>
+          <p>Total Property Ownership: <span class="result-value">₹ {{ result.baseline_total_property }}</span></p>
         </div>
       </div>
-      <div class="col-md-4">
-  <div class="card p-3">
-    <h5>With prepay</h5>
-    <p>Total interest: <strong>₹ {{ result.with_prepay_total_interest }}</strong></p>
-    <p>Tenure: <strong>{{ result.with_prepay_months }} months</strong></p>
-    <p>
-      New remaining tenure:
-      <strong>
-        {% if result.with_prepay_years and result.with_prepay_years > 0 %}
-          {{ result.with_prepay_years }} yr{% if result.with_prepay_years > 1 %}s{% endif %}
-        {% endif %}
-        {% if result.with_prepay_months_rem and result.with_prepay_months_rem > 0 %}
-          {{ result.with_prepay_months_rem }} mo{% if result.with_prepay_months_rem > 1 %}s{% endif %}
-        {% endif %}
-        {% if (not result.with_prepay_years or result.with_prepay_years == 0) and (not result.with_prepay_months_rem or result.with_prepay_months_rem == 0) %}
-          0 months
-        {% endif %}
-      </strong>
-    </p>
-    {% if result.with_prepay_end_date %}
-      <p>Estimated end date: <strong>{{ result.with_prepay_end_date }}</strong></p>
-    {% endif %}
-  </div>
-</div>
-      <div class="col-md-4">
-        <div class="card p-3">
-          <h5>Savings</h5>
-          <p>Interest saved: <strong>₹ {{ result.interest_saved }}</strong></p>
-          <p>Months saved: <strong>{{ result.months_saved }}</strong></p>
-        </div>
-      </div>
-    </div>
 
-    <div class="card">
-      <div class="card-body">
-        <h5>Sample schedule (first 12 months)</h5>
-        {% if with_prepay and with_prepay.schedule %}
-        <table class="table table-sm">
-          <thead><tr><th>Month</th><th>EMI</th><th>Interest</th><th>Principal</th><th>Extra</th><th>Lump</th><th>Remaining</th></tr></thead>
-          <tbody>
-            {% for r in with_prepay.schedule[:36] %}
-            <tr>
-              <td>{{ r.month }}</td>
-              <td>{{ r.emi }}</td>
-              <td>{{ r.interest }}</td>
-              <td>{{ r.principal }}</td>
-              <td>{{ r.extra_paid if r.extra_paid is not none else '-' }}</td>
-              <td>{{ r.lump_paid if r.lump_paid is not none else '-' }}</td>
-              <td>{{ r.remaining }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-          <p class="text-muted">No schedule available.</p>
-        {% endif %}
-        <p class="text-muted">Full schedule available — we can add CSV export if you want.</p>
+      <div class="col-md-6">
+        <div class="wizard-card">
+          <h5>With Pre-Payment</h5>
+          <p>Total Interest: <span class="result-value">₹ {{ result.with_prepay_total_interest }}</span></p>
+          <p>New Tenure: <span class="result-value">
+            {{ result.with_prepay_months }} Months /
+            {% if result.with_prepay_years > 0 %}{{ result.with_prepay_years }} Year{% if result.with_prepay_years>1 %}s{% endif %}{% if result.with_prepay_months_rem>0 %} {% endif %}{% endif %}
+            {% if result.with_prepay_months_rem > 0 %}{{ result.with_prepay_months_rem }} Month{% if result.with_prepay_months_rem>1 %}s{% endif %}{% endif %}
+          </span></p>
+          {% if result.with_prepay_end_date %}
+            <p>Estimated New End Date: <span class="result-value">{{ result.with_prepay_end_date }}</span></p>
+          {% endif %}
+          <p>Interest Saved: <span class="result-value">₹ {{ result.interest_saved }}</span></p>
+          <p>Months Saved: <span class="result-value">{{ result.months_saved }}</span></p>
+          <p>Total Property Ownership: <span class="result-value">₹ {{ result.with_prepay_total_property }}</span></p>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="wizard-card">
+          <h5>Sample Schedule — first 12 months</h5>
+          {% if schedule_serializable %}
+          <div class="table-responsive">
+            <table class="table table-sm">
+              <thead><tr><th>Month</th><th>EMI</th><th>Interest</th><th>Principal</th><th>Extra</th><th>Lump</th><th>Remaining</th></tr></thead>
+              <tbody>
+                {% for r in schedule_serializable[:12] %}
+                <tr>
+                  <td>{{ r.month }}</td>
+                  <td>{{ r.emi }}</td>
+                  <td>{{ r.interest }}</td>
+                  <td>{{ r.principal }}</td>
+                  <td>{{ r.extra_paid if r.extra_paid else '-' }}</td>
+                  <td>{{ r.lump_paid if r.lump_paid else '-' }}</td>
+                  <td>{{ r.remaining }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+            <p class="muted-small">No schedule available.</p>
+          {% endif %}
+          <div class="text-end mt-2">
+            <button class="btn btn-outline-primary" id="exportCsvBtn">Export full pre-payment schedule to CSV</button>
+            <button class="btn btn-outline-secondary" id="resetBtn" onclick="resetWizard()">Reset</button>
+          </div>
+        </div>
       </div>
     </div>
     {% endif %}
 
   </div>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script>
+    // -------------------------
+    // Utility functions (client)
+    // -------------------------
+    function parseCommaNumber(s){
+      if(!s && s !== 0) return 0;
+      return parseFloat(String(s).replace(/,/g,'') || '0');
+    }
+    function formatNumberWithCommas(v){
+      if(v===null || v===undefined || v==='') return '';
+      var n = Number(v);
+      if(isNaN(n)) return '';
+      return n.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+    }
+
+    function calcEMIClient(principal, annualRatePct, tenureYears) {
+      principal = parseCommaNumber(principal);
+      annualRatePct = parseFloat(annualRatePct) || 0;
+      tenureYears = parseFloat(tenureYears) || 0;
+      if(!principal || !tenureYears) return '';
+      var r = (annualRatePct / 100) / 12;
+      var n = tenureYears * 12;
+      if(r === 0) {
+        return (principal / n).toFixed(2);
+      }
+      var numerator = r * principal;
+      var denominator = (1 - Math.pow(1 + r, -n));
+      var emi = numerator / denominator;
+      return emi.toFixed(2);
+    }
+
+    // -------------------------
+    // Wizard navigation and UI
+    // -------------------------
+    function gotoStep(n){
+      var steps = document.querySelectorAll('.step');
+      steps.forEach(function(el){ el.classList.remove('active'); });
+      document.getElementById('step'+n).classList.add('active');
+      window.scrollTo({top:0, behavior:'smooth'});
+    }
+
+    function onMethodChange(){
+      var method = document.getElementById('method').value;
+      document.querySelectorAll('.method-input').forEach(function(el){ el.style.display='none'; });
+      if(method === 'extra_emi') document.querySelectorAll('.extra-emi-field').forEach(e=>e.style.display='block');
+      if(method === 'lump') document.querySelectorAll('.lump-field').forEach(e=>e.style.display='block');
+      if(method === 'increase_emi') document.querySelectorAll('.increase-field').forEach(e=>e.style.display='block');
+      if(method === 'extra_and_increase'){ document.querySelectorAll('.extra-emi-field').forEach(e=>e.style.display='block'); document.querySelectorAll('.increase-field').forEach(e=>e.style.display='block'); }
+    }
+
+    function onStartTypeChange(){
+      var t = document.getElementById('start_type').value;
+      var cont = document.getElementById('start_after_value_container');
+      if(t === 'immediate'){ cont.style.display = 'none'; } else { cont.style.display = 'block'; }
+    }
+
+    document.getElementById('method').addEventListener('change', onMethodChange);
+    document.getElementById('start_type').addEventListener('change', onStartTypeChange);
+
+    // format numeric inputs on blur (commas + 2 decimals)
+    document.querySelectorAll('.comma-input').forEach(function(el){
+      el.addEventListener('blur', function(){
+        var v = this.value;
+        if(v === '') return;
+        var n = parseFloat(String(v).replace(/,/g,''));
+        if(isNaN(n)) { this.value = ''; return; }
+        this.value = formatNumberWithCommas(n);
+        updateClientEMI();
+      });
+    });
+
+    function updateClientEMI(){
+      var loanAmount = document.getElementById('loan_amount').value || '';
+      var roi = document.getElementById('roi').value || '';
+      var tenure = document.getElementById('tenure_years').value || '';
+      var emiRaw = calcEMIClient(loanAmount.replace(/,/g,''), roi, tenure);
+      var emiFormatted = emiRaw ? formatNumberWithCommas(parseFloat(emiRaw)) : ( '{{ current_emi_server if current_emi_server is not none else "" }}' );
+      document.getElementById('current_emi').value = emiFormatted;
+    }
+
+    ['loan_amount','roi','tenure_years'].forEach(function(id){
+      var el = document.getElementById(id);
+      if(el) el.addEventListener('input', updateClientEMI);
+    });
+
+    window.addEventListener('load', function(){
+      onMethodChange();
+      onStartTypeChange();
+      updateClientEMI();
+
+      // Setup Chart (if data exist)
+      {% if baseline_chart_json and with_prepay_chart_json %}
+      try {
+        const baselineData = {{ baseline_chart_json|safe }};
+        const withPrepayData = {{ with_prepay_chart_json|safe }};
+        const loanStartRaw = {{ (loan_start_str|tojson) if loan_start_str is not none else 'null' }};
+        const loanStartDate = loanStartRaw ? new Date(loanStartRaw) : null;
+        const maxLen = Math.max(baselineData.length, withPrepayData.length);
+        const labels = [];
+        for (let i = 1; i <= maxLen; i++) labels.push('M' + i);
+
+        function alignedRemainingArray(arr) {
+          const map = new Map(arr.map(o => [o.month, o.remaining]));
+          const out = [];
+          for (let i = 1; i <= maxLen; i++) {
+            if (map.has(i)) out.push(map.get(i));
+            else out.push(null);
+          }
+          return out;
+        }
+
+        const baselineRemaining = alignedRemainingArray(baselineData);
+        const withPrepayRemaining = alignedRemainingArray(withPrepayData);
+
+        function formatCurrency(n) {
+          if(n === null || n === undefined) return '-';
+          return Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function monthIndexToDateLabel(monthIndex) {
+          if(!loanStartDate) return null;
+          const d = new Date(loanStartDate.getFullYear(), loanStartDate.getMonth() + (monthIndex - 1), loanStartDate.getDate());
+          return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        }
+
+        const ctx = document.getElementById('balanceChart').getContext('2d');
+        const balanceChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [
+              { label: 'Baseline (no prepay)', data: baselineRemaining, spanGaps: false, borderWidth: 2, borderDash: [6,4], fill: false, tension: 0.2 },
+              { label: 'With Prepay', data: withPrepayRemaining, spanGaps: false, borderWidth: 2, fill: false, tension: 0.2 }
+            ]
+          },
+          options: {
+            responsive: true,
+            interaction: { mode: 'index', intersect: false },
+            stacked: false,
+            scales: {
+              x: { display: true, title: { display: true, text: 'Month number' } },
+              y: {
+                display: true,
+                title: { display: true, text: 'Outstanding principal (₹)' },
+                ticks: {
+                  callback: function(value) {
+                    return (Number(value) >= 1e5) ? (Number(value)/100000).toFixed(0) + 'L' : value;
+                  }
+                }
+              }
+            },
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  title: function(tooltipItems) {
+                    const idxLabel = tooltipItems[0].label;
+                    const monthIndex = parseInt(idxLabel.replace(/^M/, ''), 10);
+                    if(loanStartDate) {
+                      const dateLabel = monthIndexToDateLabel(monthIndex);
+                      return idxLabel + ' — ' + dateLabel;
+                    }
+                    return idxLabel;
+                  },
+                  label: function(context) {
+                    const label = context.dataset.label || '';
+                    const value = context.parsed.y;
+                    return label + ': ₹ ' + formatCurrency(value);
+                  }
+                }
+              },
+              legend: { position: 'top' }
+            }
+          }
+        });
+      } catch(e){
+        console.error('Chart setup failed', e);
+      }
+      {% endif %}
+    });
+
+    // submit wizard: copy values into hidden form and POST
+    function submitWizard(){
+      var fields = ['loan_amount','principal','loan_start','tenure_years','roi','method','extra_emi','lump_sum','emi_increase_pct','frequency','start_type','start_after_value'];
+      var wf = document.getElementById('wizardForm');
+      wf.innerHTML = '';
+      fields.forEach(function(id){
+        var el = document.getElementById(id);
+        if(!el) return;
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = el.name || id;
+        var v = el.value;
+        if(el.classList.contains('comma-input')) v = v.replace(/,/g,'');
+        input.value = v;
+        wf.appendChild(input);
+      });
+      wf.submit();
+    }
+
+    // CSV export — improved (uses server-provided schedule_serializable)
+document.getElementById('exportCsvBtn') && document.getElementById('exportCsvBtn').addEventListener('click', function(){
+  // schedule_serializable is prepared server-side as an array of objects
+  // embed it safely into JS using Jinja; it will be a JS array
+  var schedule = [];
+  try {
+    schedule = {{ schedule_serializable | tojson | safe }};
+  } catch(e){
+    alert('Schedule data not available for CSV export.');
+    return;
+  }
+  if(!schedule || !schedule.length){ alert('No schedule available'); return; }
+
+  var headers = ['Month','EMI','Interest','Principal','Extra Paid','Lump Paid','Remaining'];
+  var rows = schedule.map(function(r){
+    // ensure values are CSV-safe (wrap in quotes)
+    return [
+      r.month,
+      '"' + (r.emi || '') + '"',
+      '"' + (r.interest || '') + '"',
+      '"' + (r.principal || '') + '"',
+      '"' + (r.extra_paid || '') + '"',
+      '"' + (r.lump_paid || '') + '"',
+      '"' + (r.remaining || '') + '"'
+    ];
+  });
+
+  var csvContent = [headers].concat(rows).map(e => e.join(',')).join('\n');
+  var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'prepayment_schedule.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+function resetWizardSoft() {
+  // Clear inputs used in the wizard
+  var ids = ['loan_amount','principal','current_emi','loan_start','tenure_years','roi','method','extra_emi','lump_sum','emi_increase_pct','frequency','start_type','start_after_value'];
+  ids.forEach(function(id){
+    var el = document.getElementById(id);
+    if(!el) return;
+    if(el.tagName === 'SELECT') el.selectedIndex = 0;
+    else el.value = '';
+  });
+  // Reset UI visibility and step
+  onMethodChange();
+  onStartTypeChange();
+  gotoStep(1);
+  updateClientEMI();
+
+  // Destroy chart if present
+  if(window.balanceChart && typeof window.balanceChart.destroy === 'function'){
+    window.balanceChart.destroy();
+    // optionally clear the canvas
+    try {
+      var c = document.getElementById('balanceChart');
+      var ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, c.width, c.height);
+    } catch(e) {}
+  }
+}
+
+function resetWizard() {
+  // Simple and reliable: reload the page to clear everything and return to GET state.
+  // This avoids needing to manually clear every input and chart instance.
+  window.location.reload();
+}
+
+  </script>
 </body>
 </html>
